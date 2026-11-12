@@ -707,11 +707,12 @@ struct page_cache_t {
                       << ",0x" << event.buffer_prp2_iova_or_list << ",0x"
                       << event.cache_buffer_address << std::dec << ","
                       << event.nvme_namespace_offset << "," << event.file_offset << ","
-                      << event.transfer_bytes << std::endl;
+                      << event.transfer_bytes << '\\n';
         }
         if (overflow_count > 0)
             std::cout << "BFS_NVME_READ_OVERFLOW," << bfs_level << "," << overflow_count
-                      << "," << pdt.io_trace_capacity << std::endl;
+                      << "," << pdt.io_trace_capacity << '\\n';
+        std::cout.flush();
 
         cuda_err_chk(cudaMemset(pdt.io_trace_count, 0, sizeof(unsigned long long)));
         cuda_err_chk(cudaMemset(pdt.io_trace_overflow, 0, sizeof(unsigned long long)));
