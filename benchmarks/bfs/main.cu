@@ -1164,6 +1164,23 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    if (settings.ioTrace) {
+        std::cout << "BFS_IO_TRACE,level,range,page_size_bytes,warp_page_groups,"
+                     "warp_page_lanes,nvme_read_commands,nvme_read_bytes,"
+                     "miss_lane_accesses,miss_edge_demand_bytes_est,hit_lane_accesses,"
+                     "all_lane_accesses,warps_with_1_page,warps_with_2_pages,"
+                     "warps_with_3_pages,warps_with_4_pages,warps_with_5_pages,"
+                     "warps_with_6_pages,warps_with_7_pages,warps_with_8_pages,"
+                     "warps_with_9_pages,warps_with_10_pages,warps_with_11_pages,"
+                     "warps_with_12_pages,warps_with_13_pages,warps_with_14_pages,"
+                     "warps_with_15_pages,warps_with_16_pages,warps_with_17_pages,"
+                     "warps_with_18_pages,warps_with_19_pages,warps_with_20_pages,"
+                     "warps_with_21_pages,warps_with_22_pages,warps_with_23_pages,"
+                     "warps_with_24_pages,warps_with_25_pages,warps_with_26_pages,"
+                     "warps_with_27_pages,warps_with_28_pages,warps_with_29_pages,"
+                     "warps_with_30_pages,warps_with_31_pages,warps_with_32_pages" << std::endl;
+    }
+
     cudaDeviceProp properties;
     if (cudaGetDeviceProperties(&properties, settings.cudaDevice) != cudaSuccess)
     {
@@ -1724,6 +1741,9 @@ int main(int argc, char *argv[]) {
                  level++;
 
                  cuda_err_chk(cudaMemcpy(&changed_h, changed_d, sizeof(uint64_t), cudaMemcpyDeviceToHost));
+                 if (settings.ioTrace && mem == BAFS_DIRECT) {
+                     h_array->print_reset_stats(level - 1, true);
+                 }
                  //auto end = std::chrono::system_clock::now();
                  //if(mem == BAFS_DIRECT) {
                  //     h_array->print_reset_stats();
@@ -1743,7 +1763,7 @@ int main(int argc, char *argv[]) {
                  printf("src %*u, ", 10, src);
                  printf("iteration %*u, ", 3, iter);
                  printf("time %*f ms\n", 12, milliseconds);
-                 if(mem == BAFS_DIRECT) {
+                 if(mem == BAFS_DIRECT && !settings.ioTrace) {
                      h_array->print_reset_stats();
                  }
                  fflush(stdout);
