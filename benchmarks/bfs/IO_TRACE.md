@@ -30,13 +30,13 @@ Enable command-level records with `-J true` (long option: `--nvme-io-trace true`
 
 ```bash
 ./bfs -f /path/to/graph.bel -m 6 -v 3 -J true -K 1048576 -p 4096 2>&1 \
-  | grep '^BFS_NVME_READ,' > bfs_nvme_reads.csv
+  | tee bfs_nvme_trace.log | grep '^BFS_NVME_READ,' > bfs_nvme_reads.csv
 ```
 
 Each `BFS_NVME_READ` row is emitted after the corresponding BFS level completes and represents one read command submitted to the NVMe submission queue from BaM's cache-miss path. Columns are:
 
-- `level`, `command_id`, `range_id`, `controller_id`: BFS level and command context. NVMe command IDs may be reused by a queue.
-- `buffer_iova`: PRP1 DMA/I/O address passed to the NVMe command.
+- `level`, `event_id`, `nvme_cid`, `range_id`, `controller_id`, `queue_id`: BFS level and command context. The event ID is unique within a level; NVMe CIDs may be reused by a queue.
+- `buffer_prp1_iova` and `buffer_prp2_iova_or_list`: DMA/I/O addresses in the NVMe PRP fields. PRP2 may be zero, a second data page, or a PRP-list address, depending on request size.
 - `cache_buffer_address`: GPU-visible cache-page address receiving the data.
 - `nvme_namespace_offset_bytes`: absolute byte offset in the NVMe namespace, computed as starting LBA × namespace block size.
 - `file_offset_bytes`: byte offset within the edge-array/file mapping, computed from the BaM range page index and page-start offset.
