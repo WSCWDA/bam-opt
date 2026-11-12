@@ -1182,9 +1182,9 @@ int main(int argc, char *argv[]) {
     }
 
     if (settings.nvmeIoTrace) {
-        std::cout << "BFS_NVME_READ,level,command_id,range_id,controller_id,"
-                     "buffer_iova,cache_buffer_address,nvme_namespace_offset_bytes,"
-                     "file_offset_bytes,transfer_bytes" << std::endl;
+        std::cout << "BFS_NVME_READ,level,event_id,nvme_cid,range_id,controller_id,queue_id,"
+                     "buffer_prp1_iova,buffer_prp2_iova_or_list,cache_buffer_address,"
+                     "nvme_namespace_offset_bytes,file_offset_bytes,transfer_bytes" << std::endl;
     }
 
     cudaDeviceProp properties;
