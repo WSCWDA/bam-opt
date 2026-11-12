@@ -1237,6 +1237,10 @@ int main(int argc, char *argv[]) {
              fprintf(stderr, "--nvme-io-trace requires -m 6 (BAFS_DIRECT)\n");
              return 1;
          }
+         if (settings.nvmeIoTrace && settings.ioTraceCapacity == 0) {
+             fprintf(stderr, "--io-trace-capacity must be greater than zero\n");
+             return 1;
+         }
          if (settings.nvmeIoTrace &&
              type != BASELINE_PC && type != COALESCE_PC && type != COALESCE_CHUNK_PC &&
              type != FRONTIER_BASELINE_PC && type != FRONTIER_COALESCE_PC &&
