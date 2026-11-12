@@ -1181,6 +1181,12 @@ int main(int argc, char *argv[]) {
                      "warps_with_30_pages,warps_with_31_pages,warps_with_32_pages" << std::endl;
     }
 
+    if (settings.nvmeIoTrace) {
+        std::cout << "BFS_NVME_READ,level,command_id,range_id,controller_id,"
+                     "buffer_iova,cache_buffer_address,nvme_namespace_offset_bytes,"
+                     "file_offset_bytes,transfer_bytes" << std::endl;
+    }
+
     cudaDeviceProp properties;
     if (cudaGetDeviceProperties(&properties, settings.cudaDevice) != cudaSuccess)
     {
@@ -1226,7 +1232,22 @@ int main(int argc, char *argv[]) {
          }
 
          type = (impl_type) settings.type; 
-         mem = (mem_type) settings.memalloc; 
+         mem = (mem_type) settings.memalloc;
+         if (settings.nvmeIoTrace && mem != BAFS_DIRECT) {
+             fprintf(stderr, "--nvme-io-trace requires -m 6 (BAFS_DIRECT)\n");
+             return 1;
+         }
+         if (settings.nvmeIoTrace &&
+             type != BASELINE_PC && type != COALESCE_PC && type != COALESCE_CHUNK_PC &&
+             type != FRONTIER_BASELINE_PC && type != FRONTIER_COALESCE_PC &&
+             type != BASELINE_PTR_PC && type != COALESCE_PTR_PC && type != COALESCE_CHUNK_PTR_PC &&
+             type != FRONTIER_BASELINE_PTR_PC && type != FRONTIER_COALESCE_PTR_PC &&
+             type != COALESCE_HASH_PTR_PC && type != COALESCE_COARSE_PTR_PC &&
+             type != COALESCE_HASH_COARSE_PTR_PC && type != COALESCE_HASH_HALF_PTR_PC &&
+             type != OPTIMIZED_PC) {
+             fprintf(stderr, "--nvme-io-trace requires a page-cache implementation (-v with _PC)\n");
+             return 1;
+         }
 
          pc_page_size = settings.pageSize; 
 
@@ -1487,7 +1508,7 @@ int main(int argc, char *argv[]) {
          printf("Initialization done.\n");
          fflush(stdout);
          
-         page_cache_t* h_pc; 
+         page_cache_t* h_pc = nullptr;
          range_t<uint64_t>* h_range;
          std::vector<range_t<uint64_t>*> vec_range(1);
          array_t<uint64_t>* h_array; 
@@ -1495,7 +1516,7 @@ int main(int argc, char *argv[]) {
          uint32_t* next_frontier_d;
          
          if((type==BASELINE_PC)||(type == COALESCE_PC) ||(type == COALESCE_CHUNK_PC)||(type==FRONTIER_BASELINE_PC)||(type == FRONTIER_COALESCE_PC) || (type== FRONTIER_COALESCE_PTR_PC) ||(type == COALESCE_COARSE_PTR_PC) ||(type == COALESCE_HASH_PTR_PC) || (type == COALESCE_HASH_COARSE_PTR_PC) || (type == COALESCE_HASH_HALF_PTR_PC ) || (type == OPTIMIZED_PC)){            
-            h_pc =new page_cache_t(pc_page_size, pc_pages, settings.cudaDevice, ctrls[0][0], (uint64_t) 64, ctrls);
+            h_pc =new page_cache_t(pc_page_size, pc_pages, settings.cudaDevice, ctrls[0][0], (uint64_t) 64, ctrls, settings.nvmeIoTrace, settings.ioTraceCapacity);
             h_range = new range_t<uint64_t>((uint64_t)0 ,(uint64_t)edge_count, (uint64_t) (ceil(settings.ofileoffset*1.0/pc_page_size)),(uint64_t)n_pages, (uint64_t)0, (uint64_t)pc_page_size, h_pc, settings.cudaDevice); //, (uint8_t*)edgeList_d);
             vec_range[0] = h_range; 
             h_array = new array_t<uint64_t>(edge_count, settings.ofileoffset, vec_range, settings.cudaDevice);
@@ -1741,6 +1762,8 @@ int main(int argc, char *argv[]) {
                  level++;
 
                  cuda_err_chk(cudaMemcpy(&changed_h, changed_d, sizeof(uint64_t), cudaMemcpyDeviceToHost));
+                 if (settings.nvmeIoTrace && mem == BAFS_DIRECT && h_pc != nullptr)
+                     h_pc->print_io_read_trace(level - 1);
                  if (settings.ioTrace && mem == BAFS_DIRECT) {
                      h_array->print_reset_stats(level - 1, true);
                  }
