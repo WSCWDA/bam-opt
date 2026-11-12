@@ -104,10 +104,13 @@ typedef struct __align__(32) {
 typedef data_page_t* pages_t;
 
 struct nvme_read_trace_event_t {
+    uint64_t event_id;
     uint64_t command_id;
     uint64_t range_id;
     uint64_t controller_id;
-    uint64_t buffer_iova;
+    uint64_t queue_id;
+    uint64_t buffer_prp1_iova;
+    uint64_t buffer_prp2_iova_or_list;
     uint64_t cache_buffer_address;
     uint64_t nvme_namespace_offset;
     uint64_t file_offset;
@@ -567,7 +570,7 @@ struct page_cache_d_t {
 };
 
 
-__device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry, const uint64_t range_id, const uint64_t file_offset, const uint64_t controller_id);
+__device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry, const uint64_t range_id, const uint64_t file_offset, const uint64_t controller_id, const uint64_t queue_id);
 __device__ void write_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry);
 
 __forceinline__
@@ -698,9 +701,11 @@ struct page_cache_t {
             cuda_err_chk(cudaMemcpy(events.data(), pdt.io_trace_events, n_events * sizeof(nvme_read_trace_event_t), cudaMemcpyDeviceToHost));
 
         for (const auto& event : events) {
-            std::cout << "BFS_NVME_READ," << bfs_level << "," << event.command_id << ","
-                      << event.range_id << "," << event.controller_id << ",0x" << std::hex
-                      << event.buffer_iova << ",0x" << event.cache_buffer_address << std::dec << ","
+            std::cout << "BFS_NVME_READ," << bfs_level << "," << event.event_id << ","
+                      << event.command_id << "," << event.range_id << "," << event.controller_id << ","
+                      << event.queue_id << ",0x" << std::hex << event.buffer_prp1_iova
+                      << ",0x" << event.buffer_prp2_iova_or_list << ",0x"
+                      << event.cache_buffer_address << std::dec << ","
                       << event.nvme_namespace_offset << "," << event.file_offset << ","
                       << event.transfer_bytes << std::endl;
         }
@@ -1231,7 +1236,7 @@ uint64_t range_d_t<T>::acquire_page(const size_t pg, const uint32_t count, const
                 //uint32_t queue = c->queue_counter.fetch_add(1, simt::memory_order_relaxed) % (c->n_qps);
                 //uint32_t queue = ((sm_id * 64) + warp_id()) % (c->n_qps);
                 read_io_cnt.fetch_add(1, simt::memory_order_relaxed);
-                read_data(&cache, (c->d_qps)+queue, ((b_page)*cache.n_blocks_per_page), cache.n_blocks_per_page, page_trans, range_id, index * cache.page_size + page_start_offset, ctrl);
+                read_data(&cache, (c->d_qps)+queue, ((b_page)*cache.n_blocks_per_page), cache.n_blocks_per_page, page_trans, range_id, index * cache.page_size + page_start_offset, ctrl, queue);
                 //page_addresses[index].store(page_trans, simt::memory_order_release);
                 pages[index].offset = page_trans;
                 // while (cache.page_translation[global_page].load(simt::memory_order_acquire) != page_trans)
@@ -2098,7 +2103,7 @@ inline __device__ void enqueue_second(page_cache_d_t* pc, QueuePair* qp, const u
 
 }
 
-inline __device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry, const uint64_t range_id, const uint64_t file_offset, const uint64_t controller_id) {
+inline __device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry, const uint64_t range_id, const uint64_t file_offset, const uint64_t controller_id, const uint64_t queue_id) {
     //uint64_t starting_lba = starting_byte >> qp->block_size_log;
     //uint64_t rem_bytes = starting_byte & qp->block_size_minus_1;
     //uint64_t end_lba = CEIL((starting_byte+num_bytes), qp->block_size);
@@ -2124,10 +2129,13 @@ inline __device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64
         const unsigned long long event_index = atomicAdd(pc->io_trace_count, 1ULL);
         if (event_index < pc->io_trace_capacity) {
             nvme_read_trace_event_t* event = pc->io_trace_events + event_index;
+            event->event_id = event_index;
             event->command_id = cid;
             event->range_id = range_id;
             event->controller_id = controller_id;
-            event->buffer_iova = prp1;
+            event->queue_id = queue_id;
+            event->buffer_prp1_iova = prp1;
+            event->buffer_prp2_iova_or_list = prp2;
             event->cache_buffer_address = (uint64_t)(pc->base_addr + pc_entry * pc->page_size);
             event->nvme_namespace_offset = starting_lba * pc->block_size;
             event->file_offset = file_offset;
