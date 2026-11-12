@@ -1,14 +1,8 @@
 cmake_minimum_required (VERSION 3.10)
-project (libnvm LANGUAGES C CXX)
+project (libnvm LANGUAGES CUDA C CXX)
 
 set (CMAKE_C_STANDARD 99)
-
-# GCC 14's libstdc++ needs C++14 mode when parsed by NVCC.
-set (BAM_CXX_STANDARD 11)
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14)
-    set (BAM_CXX_STANDARD 14)
-endif ()
-set (CMAKE_CXX_STANDARD ${BAM_CXX_STANDARD})
+set (CMAKE_CXX_STANDARD 11)
 
 set (THREADS_PREFER_PTHREAD_FLAG ON)
 find_package (Threads REQUIRED)
@@ -50,11 +44,11 @@ endforeach()
 set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra ${flags}" CACHE INTERNAL "" FORCE)
 set (CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_DEBUG} -g -DDEBUG" CACHE INTERNAL "" FORCE)
 set (CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O2" CACHE INTERNAL "" FORCE)
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -std=c++${BAM_CXX_STANDARD}" CACHE INTERNAL "" FORCE)
+set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -std=c++11" CACHE INTERNAL "" FORCE)
 set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG " CACHE INTERNAL "" FORCE)
 set (CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2 -std=c++${BAM_CXX_STANDARD}" CACHE INTERNAL "" FORCE)
-# GCC 14 libstdc++ headers require C++14 mode when parsed by NVCC.
-set (CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lineinfo -D__CUDA__ -D__CUDACC__ -O3;-std=c++${BAM_CXX_STANDARD};-include;${PROJECT_SOURCE_DIR}/include/bamopt_nvcc_libcxx_compat.h;${GPU_ARCHS}")
+# Keep NVCC's C++14 device parsing mode used by master; host C++ remains C++11.
+set (CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lineinfo -D__CUDA__ -D__CUDACC__ -O3;-std=c++14;${GPU_ARCHS}")
 set (CUDA_NVCC_FLAGS_RELEASE "${CMAKE_NVCC_FLAGS_RELEASE} -O2" CACHE INTERNAL "" FORCE)
 
 if (no_cc)
