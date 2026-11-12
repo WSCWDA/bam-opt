@@ -26,11 +26,11 @@ The opt-in mode copies/resets counters after each level and adds atomic updates 
 
 ## Per-command NVMe read events
 
-Enable command-level records with `-J true` (long option: `--nvme-io-trace true`). This mode requires `-m 6` and a page-cache implementation such as `-v 3`. By default, it buffers up to 1,048,576 read events per BFS level (64 MiB); set `-K N` (`--io-trace-capacity N`) to change the number of event slots.
+Enable command-level records with `-J true` (long option: `--nvme-io-trace true`). This mode requires `-m 6` and a page-cache implementation such as `-v 3`. By default, it buffers up to 1,048,576 read events per BFS level (about 64 MiB); set `-K N` (`--io-trace-capacity N`) to change the number of event slots.
 
 ```bash
 ./bfs -f /path/to/graph.bel -m 6 -v 3 -J true -K 1048576 -p 4096 2>&1 \
-  | grep '^BFS_NVME_READ' > bfs_nvme_reads.csv
+  | grep '^BFS_NVME_READ,' > bfs_nvme_reads.csv
 ```
 
 Each `BFS_NVME_READ` row is emitted after the corresponding BFS level completes and represents one read command submitted to the NVMe submission queue from BaM's cache-miss path. Columns are:
