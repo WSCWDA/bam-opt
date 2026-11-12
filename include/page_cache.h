@@ -771,8 +771,6 @@ struct page_cache_t {
         pdt.io_trace_count = nullptr;
         pdt.io_trace_overflow = nullptr;
         if (trace_io_reads) {
-            if (trace_capacity == 0)
-                throw std::invalid_argument("NVMe I/O trace capacity must be greater than zero");
             io_trace_events_buf = createBuffer(trace_capacity * sizeof(nvme_read_trace_event_t), cudaDevice);
             io_trace_count_buf = createBuffer(sizeof(unsigned long long), cudaDevice);
             io_trace_overflow_buf = createBuffer(sizeof(unsigned long long), cudaDevice);
@@ -1430,7 +1428,8 @@ struct array_d_t {
         if (!write && master == lane) {
             r_->warp_page_groups.fetch_add(1, simt::memory_order_relaxed);
             r_->warp_page_lanes.fetch_add(count, simt::memory_order_relaxed);
-            r_->warp_page_hist[warp_page_count].fetch_add(1, simt::memory_order_relaxed);
+            if (lane == leader)
+                r_->warp_page_hist[warp_page_count].fetch_add(1, simt::memory_order_relaxed);
         }
         if (master == lane) {
             //std::pair<uint64_t, bool> base_memcpyflag;
