@@ -905,6 +905,11 @@ struct range_d_t {
     simt::atomic<uint64_t, simt::thread_scope_device> miss_cnt;
     simt::atomic<uint64_t, simt::thread_scope_device> hit_cnt;
     simt::atomic<uint64_t, simt::thread_scope_device> read_io_cnt;
+    // Read-side warp coalescing observations; one group is one unique range/page
+    // among active lanes of a seq_read instruction.
+    simt::atomic<uint64_t, simt::thread_scope_device> warp_page_groups;
+    simt::atomic<uint64_t, simt::thread_scope_device> warp_page_lanes;
+    simt::atomic<uint64_t, simt::thread_scope_device> warp_page_hist[33];
 
 
     pages_t pages;
@@ -987,6 +992,10 @@ range_t<T>::range_t(uint64_t is, uint64_t count, uint64_t ps, uint64_t pc, uint6
     rdt.miss_cnt = 0;
     rdt.hit_cnt = 0;
     rdt.read_io_cnt = 0;
+    rdt.warp_page_groups = 0;
+    rdt.warp_page_lanes = 0;
+    for (size_t i = 0; i < 33; ++i)
+        rdt.warp_page_hist[i] = 0;
     rdt.index_start = is;
     rdt.count = count;
     //range_id = (c_h->range_count)++;
@@ -1345,11 +1354,17 @@ struct array_d_t {
         master = __ffs(eq_mask) - 1;
 
         uint32_t dirty = __any_sync(eq_mask, write);
+        uint32_t warp_page_count = __popc(__ballot_sync(mask, master == lane));
 
         uint64_t base;
         //bool memcpyflag_master;
         //bool memcpyflag;
         count = __popc(eq_mask);
+        if (!write && master == lane) {
+            r_->warp_page_groups.fetch_add(1, simt::memory_order_relaxed);
+            r_->warp_page_lanes.fetch_add(count, simt::memory_order_relaxed);
+            r_->warp_page_hist[warp_page_count].fetch_add(1, simt::memory_order_relaxed);
+        }
         if (master == lane) {
             //std::pair<uint64_t, bool> base_memcpyflag;
             base = r_->acquire_page(page, count, dirty, ctrl, queue);
@@ -1722,25 +1737,42 @@ struct array_t {
     BufferPtr d_ranges_buff;
     BufferPtr d_d_ranges_buff;
 
-    void print_reset_stats(void) {
+    void print_reset_stats(uint64_t bfs_level = UINT64_MAX, bool csv = false) {
         std::vector<range_d_t<T>> rdt(adt.n_ranges);
-        //range_d_t<T>* rdt = new range_d_t<T>[adt.n_ranges];
         cuda_err_chk(cudaMemcpy(rdt.data(), adt.d_ranges, adt.n_ranges*sizeof(range_d_t<T>), cudaMemcpyDeviceToHost));
         for (size_t i = 0; i < adt.n_ranges; i++) {
-
-            std::cout << std::dec << "#READ IOs: "  << rdt[i].read_io_cnt 
-                                  << "\t#Accesses:" << rdt[i].access_cnt
-                                  << "\t#Misses:"   << rdt[i].miss_cnt 
-                                  << "\tMiss Rate:" << ((float)rdt[i].miss_cnt/rdt[i].access_cnt)
-                                  << "\t#Hits: "    << rdt[i].hit_cnt 
-                                  << "\tHit Rate:"  << ((float)rdt[i].hit_cnt/rdt[i].access_cnt) 
-                                  << "\tCLSize:"    << rdt[i].page_size 
-                                  << std::endl;
-            std::cout << "*********************************" << std::endl;
+            if (csv) {
+                const uint64_t page_size = rdt[i].page_size;
+                const uint64_t io_bytes = rdt[i].read_io_cnt * page_size;
+                const uint64_t edge_miss_demand_bytes = rdt[i].miss_cnt * sizeof(T);
+                std::cout << "BFS_IO_TRACE," << bfs_level << "," << i << ","
+                          << page_size << "," << rdt[i].warp_page_groups << ","
+                          << rdt[i].warp_page_lanes << "," << rdt[i].read_io_cnt << ","
+                          << io_bytes << "," << rdt[i].miss_cnt << ","
+                          << edge_miss_demand_bytes << "," << rdt[i].hit_cnt << ","
+                          << rdt[i].access_cnt;
+                for (size_t pages = 1; pages <= 32; ++pages)
+                    std::cout << "," << rdt[i].warp_page_hist[pages];
+                std::cout << std::endl;
+            } else {
+                std::cout << std::dec << "#READ IOs: "  << rdt[i].read_io_cnt
+                          << "\t#Accesses:" << rdt[i].access_cnt
+                          << "\t#Misses:"   << rdt[i].miss_cnt
+                          << "\tMiss Rate:" << ((float)rdt[i].miss_cnt/rdt[i].access_cnt)
+                          << "\t#Hits: "    << rdt[i].hit_cnt
+                          << "\tHit Rate:"  << ((float)rdt[i].hit_cnt/rdt[i].access_cnt)
+                          << "\tCLSize:"    << rdt[i].page_size
+                          << std::endl;
+                std::cout << "*********************************" << std::endl;
+            }
             rdt[i].read_io_cnt = 0;
             rdt[i].access_cnt = 0;
             rdt[i].miss_cnt = 0;
             rdt[i].hit_cnt = 0;
+            rdt[i].warp_page_groups = 0;
+            rdt[i].warp_page_lanes = 0;
+            for (size_t pages = 0; pages < 33; ++pages)
+                rdt[i].warp_page_hist[pages] = 0;
         }
         cuda_err_chk(cudaMemcpy(adt.d_ranges, rdt.data(), adt.n_ranges*sizeof(range_d_t<T>), cudaMemcpyHostToDevice));
     }
