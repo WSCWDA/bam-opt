@@ -103,6 +103,17 @@ typedef struct __align__(32) {
 
 typedef data_page_t* pages_t;
 
+struct nvme_read_trace_event_t {
+    uint64_t command_id;
+    uint64_t range_id;
+    uint64_t controller_id;
+    uint64_t buffer_iova;
+    uint64_t cache_buffer_address;
+    uint64_t nvme_namespace_offset;
+    uint64_t file_offset;
+    uint64_t transfer_bytes;
+};
+
 template<typename T>
 struct returned_cache_page_t {
     T* addr;
@@ -537,6 +548,12 @@ struct page_cache_d_t {
     bool prps;
 
     uint64_t n_blocks_per_page;
+    uint64_t block_size;
+    nvme_read_trace_event_t* io_trace_events;
+    unsigned long long* io_trace_count;
+    unsigned long long* io_trace_overflow;
+    uint64_t io_trace_capacity;
+    bool io_trace_enabled;
 
     __forceinline__
     __device__
@@ -550,7 +567,7 @@ struct page_cache_d_t {
 };
 
 
-__device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry);
+__device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry, const uint64_t range_id, const uint64_t file_offset, const uint64_t controller_id);
 __device__ void write_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry);
 
 __forceinline__
@@ -662,6 +679,38 @@ struct page_cache_t {
     BufferPtr q_tail_buf;
     BufferPtr q_lock_buf;
     BufferPtr extra_reads_buf;
+    BufferPtr io_trace_events_buf;
+    BufferPtr io_trace_count_buf;
+    BufferPtr io_trace_overflow_buf;
+
+    void print_io_read_trace(uint64_t bfs_level) {
+        if (!pdt.io_trace_enabled)
+            return;
+
+        unsigned long long event_count = 0;
+        unsigned long long overflow_count = 0;
+        cuda_err_chk(cudaMemcpy(&event_count, pdt.io_trace_count, sizeof(event_count), cudaMemcpyDeviceToHost));
+        cuda_err_chk(cudaMemcpy(&overflow_count, pdt.io_trace_overflow, sizeof(overflow_count), cudaMemcpyDeviceToHost));
+
+        const uint64_t n_events = event_count < pdt.io_trace_capacity ? event_count : pdt.io_trace_capacity;
+        std::vector<nvme_read_trace_event_t> events(n_events);
+        if (n_events > 0)
+            cuda_err_chk(cudaMemcpy(events.data(), pdt.io_trace_events, n_events * sizeof(nvme_read_trace_event_t), cudaMemcpyDeviceToHost));
+
+        for (const auto& event : events) {
+            std::cout << "BFS_NVME_READ," << bfs_level << "," << event.command_id << ","
+                      << event.range_id << "," << event.controller_id << ",0x" << std::hex
+                      << event.buffer_iova << ",0x" << event.cache_buffer_address << std::dec << ","
+                      << event.nvme_namespace_offset << "," << event.file_offset << ","
+                      << event.transfer_bytes << std::endl;
+        }
+        if (overflow_count > 0)
+            std::cout << "BFS_NVME_READ_OVERFLOW," << bfs_level << "," << overflow_count
+                      << "," << pdt.io_trace_capacity << std::endl;
+
+        cuda_err_chk(cudaMemset(pdt.io_trace_count, 0, sizeof(unsigned long long)));
+        cuda_err_chk(cudaMemset(pdt.io_trace_overflow, 0, sizeof(unsigned long long)));
+    }
 
     void print_reset_stats(void) {
         uint64_t v = 0;
@@ -694,7 +743,7 @@ struct page_cache_t {
 
     }
 
-    page_cache_t(const uint64_t ps, const uint64_t np, const uint32_t cudaDevice, const Controller& ctrl, const uint64_t max_range, const std::vector<Controller*>& ctrls) {
+    page_cache_t(const uint64_t ps, const uint64_t np, const uint32_t cudaDevice, const Controller& ctrl, const uint64_t max_range, const std::vector<Controller*>& ctrls, const bool trace_io_reads = false, const uint64_t trace_capacity = 1048576) {
 
         ctrl_counter_buf = createBuffer(sizeof(simt::atomic<uint64_t, simt::thread_scope_device>), cudaDevice);
         q_head_buf = createBuffer(sizeof(simt::atomic<uint64_t, simt::thread_scope_device>), cudaDevice);
@@ -715,6 +764,24 @@ struct page_cache_t {
         d_ctrls_buff = createBuffer(pdt.n_ctrls * sizeof(Controller*), cudaDevice);
         pdt.d_ctrls = (Controller**) d_ctrls_buff.get();
         pdt.n_blocks_per_page = (ps/ctrl.blk_size);
+        pdt.block_size = ctrl.blk_size;
+        pdt.io_trace_enabled = trace_io_reads;
+        pdt.io_trace_capacity = trace_io_reads ? trace_capacity : 0;
+        pdt.io_trace_events = nullptr;
+        pdt.io_trace_count = nullptr;
+        pdt.io_trace_overflow = nullptr;
+        if (trace_io_reads) {
+            if (trace_capacity == 0)
+                throw std::invalid_argument("NVMe I/O trace capacity must be greater than zero");
+            io_trace_events_buf = createBuffer(trace_capacity * sizeof(nvme_read_trace_event_t), cudaDevice);
+            io_trace_count_buf = createBuffer(sizeof(unsigned long long), cudaDevice);
+            io_trace_overflow_buf = createBuffer(sizeof(unsigned long long), cudaDevice);
+            pdt.io_trace_events = (nvme_read_trace_event_t*)io_trace_events_buf.get();
+            pdt.io_trace_count = (unsigned long long*)io_trace_count_buf.get();
+            pdt.io_trace_overflow = (unsigned long long*)io_trace_overflow_buf.get();
+            cuda_err_chk(cudaMemset(pdt.io_trace_count, 0, sizeof(unsigned long long)));
+            cuda_err_chk(cudaMemset(pdt.io_trace_overflow, 0, sizeof(unsigned long long)));
+        }
         pdt.n_cachelines_for_states = np/STATES_PER_CACHELINE;
         for (size_t k = 0; k < pdt.n_ctrls; k++)
             cuda_err_chk(cudaMemcpy(pdt.d_ctrls+k, &(ctrls[k]->d_ctrl_ptr), sizeof(Controller*), cudaMemcpyHostToDevice));
@@ -1166,7 +1233,7 @@ uint64_t range_d_t<T>::acquire_page(const size_t pg, const uint32_t count, const
                 //uint32_t queue = c->queue_counter.fetch_add(1, simt::memory_order_relaxed) % (c->n_qps);
                 //uint32_t queue = ((sm_id * 64) + warp_id()) % (c->n_qps);
                 read_io_cnt.fetch_add(1, simt::memory_order_relaxed);
-                read_data(&cache, (c->d_qps)+queue, ((b_page)*cache.n_blocks_per_page), cache.n_blocks_per_page, page_trans);
+                read_data(&cache, (c->d_qps)+queue, ((b_page)*cache.n_blocks_per_page), cache.n_blocks_per_page, page_trans, range_id, index * cache.page_size + page_start_offset, ctrl);
                 //page_addresses[index].store(page_trans, simt::memory_order_release);
                 pages[index].offset = page_trans;
                 // while (cache.page_translation[global_page].load(simt::memory_order_acquire) != page_trans)
@@ -2032,7 +2099,7 @@ inline __device__ void enqueue_second(page_cache_d_t* pc, QueuePair* qp, const u
 
 }
 
-inline __device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry) {
+inline __device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64_t starting_lba, const uint64_t n_blocks, const unsigned long long pc_entry, const uint64_t range_id, const uint64_t file_offset, const uint64_t controller_id) {
     //uint64_t starting_lba = starting_byte >> qp->block_size_log;
     //uint64_t rem_bytes = starting_byte & qp->block_size_minus_1;
     //uint64_t end_lba = CEIL((starting_byte+num_bytes), qp->block_size);
@@ -2054,6 +2121,22 @@ inline __device__ void read_data(page_cache_d_t* pc, QueuePair* qp, const uint64
     ////printf("tid: %llu\tstart_lba: %llu\tn_blocks: %llu\tprp1: %p\n", (unsigned long long) (threadIdx.x+blockIdx.x*blockDim.x), (unsigned long long) starting_lba, (unsigned long long) n_blocks, (void*) prp1);
     nvm_cmd_data_ptr(&cmd, prp1, prp2);
     nvm_cmd_rw_blks(&cmd, starting_lba, n_blocks);
+    if (pc->io_trace_enabled) {
+        const unsigned long long event_index = atomicAdd(pc->io_trace_count, 1ULL);
+        if (event_index < pc->io_trace_capacity) {
+            nvme_read_trace_event_t* event = pc->io_trace_events + event_index;
+            event->command_id = cid;
+            event->range_id = range_id;
+            event->controller_id = controller_id;
+            event->buffer_iova = prp1;
+            event->cache_buffer_address = (uint64_t)(pc->base_addr + pc_entry * pc->page_size);
+            event->nvme_namespace_offset = starting_lba * pc->block_size;
+            event->file_offset = file_offset;
+            event->transfer_bytes = n_blocks * pc->block_size;
+        } else {
+            atomicAdd(pc->io_trace_overflow, 1ULL);
+        }
+    }
     uint16_t sq_pos = sq_enqueue(&qp->sq, &cmd);
     uint32_t head, head_;
     uint64_t pc_pos;
